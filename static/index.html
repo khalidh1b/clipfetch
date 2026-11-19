@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ClipFetch — Simple media downloads</title>
+<style>
+:root{color-scheme:dark;--bg:#0b1020;--panel:#121a2e;--muted:#94a3b8;--line:#26334d;--accent:#7c9cff}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 50% 0,#1c2b50 0,var(--bg) 55%);font:16px system-ui;color:#eef2ff;min-height:100vh}
+header{max-width:1000px;margin:auto;padding:26px 22px;display:flex;justify-content:space-between;align-items:center}
+.logo{font-weight:800;font-size:22px;letter-spacing:-.5px}.logo span{color:var(--accent)}
+.pill{font-size:12px;color:#cbd5e1;border:1px solid var(--line);padding:7px 11px;border-radius:99px}
+main{max-width:850px;margin:8vh auto 0;padding:24px 20px;text-align:center}
+h1{font-size:clamp(34px,6vw,54px);line-height:1.08;letter-spacing:-1.8px;margin:0 0 16px}
+.sub{color:var(--muted);font-size:17px;margin-bottom:34px}
+.card{background:rgba(18,26,46,.92);border:1px solid var(--line);padding:22px;border-radius:18px;box-shadow:0 24px 80px #0005}
+.row{display:flex;gap:10px}.row input{min-width:0;flex:1;background:#0b1224;border:1px solid #34415e;border-radius:11px;padding:16px;color:white;font-size:15px;outline:none}
+button{border:0;border-radius:11px;background:var(--accent);color:#081126;font-weight:750;padding:0 23px;font-size:15px;cursor:pointer}
+button:disabled{opacity:.5;cursor:wait}
+.hint{font-size:12px;color:var(--muted);margin-top:14px}
+#result{display:none;text-align:left;margin-top:18px}.media{display:flex;gap:15px;align-items:center;margin-bottom:16px}
+.media img{width:112px;height:68px;object-fit:cover;border-radius:8px;background:#0b1224}
+select{width:100%;padding:14px;border-radius:10px;background:#0b1224;color:white;border:1px solid #34415e;margin-bottom:12px}
+#download{height:48px;width:100%}#status{margin-top:16px;color:#cbd5e1;font-size:14px;overflow-wrap:anywhere}
+footer{color:#64748b;font-size:12px;text-align:center;margin:48px 20px 25px}
+@media(max-width:560px){.row{flex-direction:column}.row button{height:50px}.card{padding:15px}main{margin-top:5vh}}
+</style>
+</head>
+<body>
+<header><div class="logo">Clip<span>Fetch</span></div><div class="pill">Simple · Fast · No account</div></header>
+<main>
+<h1>Media, made <span style="color:var(--accent)">easy.</span></h1>
+<p class="sub">Paste a public media link to check available formats.</p>
+<section class="card">
+<div class="row"><input id="url" type="url" placeholder="Paste video URL here…" autocomplete="url"><button id="go">Analyze URL</button></div>
+<div class="hint">Only download media you own or are authorized to save. DRM and access controls are not bypassed.</div>
+<div id="result">
+<div class="media"><img id="thumb" alt=""><div><strong id="title"></strong><div class="hint">Choose an available format</div></div></div>
+<select id="formats"></select><button id="download">Prepare download</button>
+</div><div id="status" role="status"></div>
+</section>
+</main>
+<footer>ClipFetch · Use responsibly and respect creators’ rights.</footer>
+<script>
+const $=id=>document.getElementById(id);let currentUrl="";
+$("go").onclick=async()=>{
+ const url=$("url").value.trim(); if(!url){$("status").textContent="Paste a URL first.";return}
+ $("go").disabled=true;$("status").textContent="Analyzing link…";$("result").style.display="none";
+ try{
+  const r=await fetch("/api/analyze",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url})});
+  const d=await r.json();if(!r.ok)throw Error(d.detail||"Could not analyze this URL.");
+  currentUrl=url;$("title").textContent=d.title;$("thumb").src=d.thumbnail||"";
+  $("formats").innerHTML="";
+  d.formats.forEach(f=>{let o=document.createElement("option");o.value=f.id;o.textContent=f.label+" · "+f.ext;$("formats").appendChild(o)});
+  if(!d.formats.length)throw Error("No downloadable formats were found.");
+  $("result").style.display="block";$("status").textContent="";
+ }catch(e){$("status").textContent=e.message}
+ finally{$("go").disabled=false}
+};
+$("download").onclick=async()=>{
+ $("download").disabled=true;$("status").textContent="Preparing your file…";
+ try{
+  const r=await fetch("/api/download",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:currentUrl,format_id:$("formats").value})});
+  const d=await r.json();if(!r.ok)throw Error(d.detail||"Could not start download.");
+  const poll=async()=>{const s=await fetch("/api/status/"+d.job_id).then(x=>x.json());
+   if(s.status==="done"){ $("status").innerHTML="Your file is ready. <a style='color:#9db4ff' href='/api/file/"+d.job_id+"'>Download file</a>";$("download").disabled=false;return}
+   if(s.status==="error"){ $("status").textContent=s.error;$("download").disabled=false;return}
+   $("status").textContent="Processing…";setTimeout(poll,1800)};
+  poll();
+ }catch(e){$("status").textContent=e.message;$("download").disabled=false}
+};
+</script>
+</body></html>
