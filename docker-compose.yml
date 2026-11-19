@@ -1,0 +1,9 @@
+services:
+  clipfetch:
+    build: .
+    container_name: clipfetch
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./downloads:/app/downloads
