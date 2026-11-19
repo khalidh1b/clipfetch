@@ -21,8 +21,23 @@ button:disabled{opacity:.5;cursor:wait}
 .media img{width:112px;height:68px;object-fit:cover;border-radius:8px;background:#0b1224}
 select{width:100%;padding:14px;border-radius:10px;background:#0b1224;color:white;border:1px solid #34415e;margin-bottom:12px}
 #download{height:48px;width:100%}#status{margin-top:16px;color:#cbd5e1;font-size:14px;overflow-wrap:anywhere}
+#progress{display:none;text-align:left;margin-top:20px;padding:17px;background:#0b1224;border:1px solid var(--line);border-radius:12px}
+.progress-heading{display:flex;justify-content:space-between;gap:12px;align-items:center;font-size:14px;font-weight:650}
+#progress-count{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.progress-track{height:5px;margin:13px 0 15px;background:#26334d;border-radius:99px;overflow:hidden}
+.progress-track::after{content:"";display:block;width:35%;height:100%;background:var(--accent);border-radius:inherit;transform:translateX(-110%);animation:progress-sweep 1.35s ease-in-out infinite}
+#progress[data-state="complete"] .progress-track::after{width:100%;transform:none;animation:none}
+#progress[data-state="error"] .progress-track::after{width:100%;background:#fb7185;transform:none;animation:none}
+@keyframes progress-sweep{to{transform:translateX(300%)}}
+.progress-steps{list-style:none;padding:0;margin:0;display:grid;gap:10px}
+.progress-step{display:flex;align-items:center;gap:10px;color:#64748b;font-size:13px}
+.step-number{width:23px;height:23px;display:grid;place-items:center;flex:none;border:1px solid #34415e;border-radius:50%;font-size:11px;font-weight:700}
+.progress-step[data-state="active"]{color:#eef2ff}.progress-step[data-state="active"] .step-number{border-color:var(--accent);color:var(--accent);box-shadow:0 0 0 3px #7c9cff22}
+.progress-step[data-state="complete"]{color:#a5b4fc}.progress-step[data-state="complete"] .step-number{background:var(--accent);border-color:var(--accent);color:#081126}
+.progress-step[data-state="error"]{color:#fda4af}.progress-step[data-state="error"] .step-number{border-color:#fb7185;color:#fb7185}
 footer{color:#64748b;font-size:12px;text-align:center;margin:48px 20px 25px}
 @media(max-width:560px){.row{flex-direction:column}.row button{height:50px}.card{padding:15px}main{margin-top:5vh}}
+@media(prefers-reduced-motion:reduce){.progress-track::after{animation:none;transform:none}}
 </style>
 </head>
 <body>
@@ -36,37 +51,95 @@ footer{color:#64748b;font-size:12px;text-align:center;margin:48px 20px 25px}
 <div id="result">
 <div class="media"><img id="thumb" alt=""><div><strong id="title"></strong><div class="hint">Choose an available format</div></div></div>
 <select id="formats"></select><button id="download">Prepare download</button>
-</div><div id="status" role="status"></div>
+</div>
+<div id="progress" role="region" aria-label="Task progress" aria-live="polite" data-state="working">
+<div class="progress-heading"><span id="progress-label"></span><span id="progress-count"></span></div>
+<div class="progress-track" role="progressbar" aria-label="Task progress" aria-valuemin="0" aria-valuemax="100" aria-valuetext="In progress"></div>
+<ol id="progress-steps" class="progress-steps"></ol>
+</div>
+<div id="status" role="status" aria-live="polite"></div>
 </section>
 </main>
 <footer>ClipFetch · Use responsibly and respect creators’ rights.</footer>
 <script>
 const $=id=>document.getElementById(id);let currentUrl="";
+let progressTimer;
+function showProgress(label,steps,activeIndex){
+ clearInterval(progressTimer);
+ const panel=$("progress");panel.style.display="block";panel.dataset.state="working";
+ $("progress-label").textContent=label;
+ $("progress-count").textContent=`Step ${activeIndex+1} of ${steps.length}`;
+ const bar=panel.querySelector('[role="progressbar"]');bar.removeAttribute("aria-valuenow");bar.setAttribute("aria-valuetext",`Step ${activeIndex+1} of ${steps.length}: ${steps[activeIndex]}`);
+ $("progress-steps").replaceChildren(...steps.map((step,index)=>{
+  const item=document.createElement("li");item.className="progress-step";
+  item.dataset.state=index<activeIndex?"complete":index===activeIndex?"active":"pending";
+  const number=document.createElement("span");number.className="step-number";number.textContent=index<activeIndex?"✓":String(index+1);
+  const text=document.createElement("span");text.textContent=step;
+  item.append(number,text);return item;
+ }));
+}
+function finishProgress(state,label,steps){
+ clearInterval(progressTimer);
+ const panel=$("progress");panel.dataset.state=state;
+ $("progress-label").textContent=label;
+ const completed=state==="complete"?steps.length:Math.max(0,Number(panel.dataset.activeIndex)||0);
+ $("progress-count").textContent=state==="complete"?`Step ${steps.length} of ${steps.length}`:"Needs attention";
+ const bar=panel.querySelector('[role="progressbar"]');bar.setAttribute("aria-valuenow",state==="complete"?"100":"0");bar.setAttribute("aria-valuetext",label);
+ $("progress-steps").replaceChildren(...steps.map((step,index)=>{
+  const item=document.createElement("li");item.className="progress-step";
+  item.dataset.state=state==="error"&&index===completed?"error":index<completed?"complete":"pending";
+  const number=document.createElement("span");number.className="step-number";number.textContent=index<completed?"✓":String(index+1);
+  const text=document.createElement("span");text.textContent=step;
+  item.append(number,text);return item;
+ }));
+}
+function setActiveStep(index,steps,label){
+ const panel=$("progress");panel.dataset.activeIndex=String(index);
+ showProgress(label,steps,index);
+ panel.dataset.activeIndex=String(index);
+}
+const analyzeSteps=["Validate link","Inspect media source","Load available formats"];
+const downloadSteps=["Start download job","Download and process media","File ready"];
 $("go").onclick=async()=>{
  const url=$("url").value.trim(); if(!url){$("status").textContent="Paste a URL first.";return}
- $("go").disabled=true;$("status").textContent="Analyzing link…";$("result").style.display="none";
+ $("go").disabled=true;$("status").textContent="";$("result").style.display="none";
+ setActiveStep(0,analyzeSteps,"Analyzing link");
+ progressTimer=setTimeout(()=>setActiveStep(1,analyzeSteps,"Checking the media source"),450);
  try{
   const r=await fetch("/api/analyze",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url})});
   const d=await r.json();if(!r.ok)throw Error(d.detail||"Could not analyze this URL.");
+  setActiveStep(2,analyzeSteps,"Loading available formats");
   currentUrl=url;$("title").textContent=d.title;$("thumb").src=d.thumbnail||"";
   $("formats").innerHTML="";
   d.formats.forEach(f=>{let o=document.createElement("option");o.value=f.id;o.textContent=f.label+" · "+f.ext;$("formats").appendChild(o)});
   if(!d.formats.length)throw Error("No downloadable formats were found.");
-  $("result").style.display="block";$("status").textContent="";
- }catch(e){$("status").textContent=e.message}
+  $("result").style.display="block";finishProgress("complete","Analysis complete",analyzeSteps);
+ }catch(e){finishProgress("error","Analysis could not be completed",analyzeSteps);$("status").textContent=e.message}
  finally{$("go").disabled=false}
 };
 $("download").onclick=async()=>{
- $("download").disabled=true;$("status").textContent="Preparing your file…";
+ $("download").disabled=true;$("status").textContent="";
+ setActiveStep(0,downloadSteps,"Starting your download");
+ progressTimer=setTimeout(()=>setActiveStep(1,downloadSteps,"Downloading and processing your file"),500);
  try{
   const r=await fetch("/api/download",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:currentUrl,format_id:$("formats").value})});
   const d=await r.json();if(!r.ok)throw Error(d.detail||"Could not start download.");
-  const poll=async()=>{const s=await fetch("/api/status/"+d.job_id).then(x=>x.json());
-   if(s.status==="done"){ $("status").innerHTML="Your file is ready. <a style='color:#9db4ff' href='/api/file/"+d.job_id+"'>Download file</a>";$("download").disabled=false;return}
-   if(s.status==="error"){ $("status").textContent=s.error;$("download").disabled=false;return}
-   $("status").textContent="Processing…";setTimeout(poll,1800)};
+  setActiveStep(1,downloadSteps,"Downloading and processing your file");
+  const poll=async()=>{
+   try{
+    const response=await fetch("/api/status/"+encodeURIComponent(d.job_id));
+    const s=await response.json();if(!response.ok)throw Error(s.detail||"Could not check download status.");
+    if(s.status==="done"){
+     setActiveStep(2,downloadSteps,"Your file is ready");
+     $("status").innerHTML="Your file is ready. <a style='color:#9db4ff' href='/api/file/"+encodeURIComponent(d.job_id)+"'>Download file</a>";
+     finishProgress("complete","Download ready",downloadSteps);$("download").disabled=false;return;
+    }
+    if(s.status==="error")throw Error(s.error||"Download failed.");
+    setActiveStep(1,downloadSteps,"Downloading and processing your file");setTimeout(poll,1800);
+   }catch(e){finishProgress("error","Download could not be completed",downloadSteps);$("status").textContent=e.message;$("download").disabled=false}
+  };
   poll();
- }catch(e){$("status").textContent=e.message;$("download").disabled=false}
+ }catch(e){finishProgress("error","Download could not be started",downloadSteps);$("status").textContent=e.message;$("download").disabled=false}
 };
 </script>
 </body></html>
